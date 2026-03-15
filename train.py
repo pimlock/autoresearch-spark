@@ -7,6 +7,8 @@ Usage: uv run train.py
 import os
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+# Use system CUDA 13.0 ptxas which supports sm_121a (NVIDIA GB10 / Blackwell)
+os.environ.setdefault("TRITON_PTXAS_PATH", "/usr/local/cuda-13.0/bin/ptxas")
 
 import gc
 import math
@@ -17,11 +19,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from kernels import get_kernel
-cap = torch.cuda.get_device_capability()
-# varunneal's FA3 is Hopper only, use kernels-community on non-Hopper GPUs
-repo = "varunneal/flash-attention-3" if cap == (9, 0) else "kernels-community/flash-attn3"
-fa3 = get_kernel(repo).flash_attn_interface
 
 from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
 
@@ -90,8 +87,24 @@ class CausalSelfAttention(nn.Module):
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         q, k = norm(q), norm(k)
 
-        y = fa3.flash_attn_func(q, k, v, causal=True, window_size=window_size)
-        y = y.contiguous().view(B, T, -1)
+        # SDPA expects (B, heads, T, head_dim)
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        # GQA: expand k, v to match q heads
+        if self.n_head != self.n_kv_head:
+            groups = self.n_head // self.n_kv_head
+            k = k.repeat_interleave(groups, dim=1)
+            v = v.repeat_interleave(groups, dim=1)
+        # Sliding window causal mask
+        w = window_size[0]
+        if w < T:
+            rows = torch.arange(T, device=x.device).unsqueeze(1)
+            cols = torch.arange(T, device=x.device).unsqueeze(0)
+            mask = (cols <= rows) & (cols > rows - w)
+            attn_mask = torch.zeros(T, T, device=x.device, dtype=q.dtype).masked_fill(~mask, float('-inf'))
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        y = y.transpose(1, 2).contiguous().view(B, T, -1)
         y = self.c_proj(y)
         return y
 
