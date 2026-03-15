@@ -641,3 +641,14 @@ print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
 print(f"num_steps:        {step}")
 print(f"num_params_M:     {num_params / 1e6:.1f}")
 print(f"depth:            {DEPTH}")
+
+# Save checkpoint
+ckpt = {
+    "model": model.state_dict(),
+    "config": asdict(config),
+    "tokenizer_vocab_size": vocab_size,
+    "val_bpb": val_bpb,
+    "total_tokens": total_tokens,
+}
+torch.save(ckpt, "model.pt")
+print("model saved to model.pt")
