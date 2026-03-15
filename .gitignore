@@ -16,8 +16,15 @@ queue/
 CLAUDE.md
 AGENTS.md
 
+# IDE
+.idea/
+
 # Experimental code/artifacts
 dev/
 
-# Results file
+# Results file (generated per experiment run, not committed)
 results.tsv
+
+# Training artifacts
+model.pt
+run.log

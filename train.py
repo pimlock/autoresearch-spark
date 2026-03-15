@@ -7,6 +7,8 @@ Usage: uv run train.py
 import os
 os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
 os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
+# Use system CUDA 13.0 ptxas which supports sm_121a (NVIDIA GB10 / Blackwell)
+os.environ.setdefault("TRITON_PTXAS_PATH", "/usr/local/cuda-13.0/bin/ptxas")
 
 import gc
 import math
@@ -17,11 +19,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from kernels import get_kernel
-cap = torch.cuda.get_device_capability()
-# varunneal's FA3 is Hopper only, use kernels-community on non-Hopper GPUs
-repo = "varunneal/flash-attention-3" if cap == (9, 0) else "kernels-community/flash-attn3"
-fa3 = get_kernel(repo).flash_attn_interface
 
 from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
 
@@ -90,8 +87,24 @@ class CausalSelfAttention(nn.Module):
         q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
         q, k = norm(q), norm(k)
 
-        y = fa3.flash_attn_func(q, k, v, causal=True, window_size=window_size)
-        y = y.contiguous().view(B, T, -1)
+        # SDPA expects (B, heads, T, head_dim)
+        q, k, v = q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2)
+        # GQA: expand k, v to match q heads
+        if self.n_head != self.n_kv_head:
+            groups = self.n_head // self.n_kv_head
+            k = k.repeat_interleave(groups, dim=1)
+            v = v.repeat_interleave(groups, dim=1)
+        # Sliding window causal mask
+        w = window_size[0]
+        if w < T:
+            rows = torch.arange(T, device=x.device).unsqueeze(1)
+            cols = torch.arange(T, device=x.device).unsqueeze(0)
+            mask = (cols <= rows) & (cols > rows - w)
+            attn_mask = torch.zeros(T, T, device=x.device, dtype=q.dtype).masked_fill(~mask, float('-inf'))
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        y = y.transpose(1, 2).contiguous().view(B, T, -1)
         y = self.c_proj(y)
         return y
 
@@ -460,7 +473,31 @@ torch.cuda.manual_seed(42)
 torch.set_float32_matmul_precision("high")
 device = torch.device("cuda")
 autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
-H100_BF16_PEAK_FLOPS = 989.5e12
+# Peak BF16 FLOPS by GPU model (for MFU calculation)
+_GPU_PEAK_FLOPS = {
+    # NVIDIA
+    "H100":   989.5e12,
+    "H200":   989.5e12,
+    "A100":   312.0e12,
+    "B200":   2250.0e12,
+    "GB10":   125.0e12,
+    # AMD Instinct
+    "MI300X": 1307.4e12,
+    "MI308X": 1307.4e12,
+    "MI325X": 1307.4e12,
+    "MI250X": 383.0e12,
+}
+
+def _detect_peak_flops():
+    gpu_name = torch.cuda.get_device_name(0)
+    for key, flops in _GPU_PEAK_FLOPS.items():
+        if key.lower() in gpu_name.lower():
+            print(f"Detected GPU: {gpu_name} -> peak BF16 FLOPS: {flops:.1e}")
+            return flops
+    print(f"Warning: Unknown GPU '{gpu_name}', defaulting to H100 peak FLOPS for MFU")
+    return _GPU_PEAK_FLOPS["H100"]
+
+PEAK_BF16_FLOPS = _detect_peak_flops()
 
 tokenizer = Tokenizer.from_directory()
 vocab_size = tokenizer.get_vocab_size()
@@ -584,7 +621,7 @@ while True:
     debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
     pct_done = 100 * progress
     tok_per_sec = int(TOTAL_BATCH_SIZE / dt)
-    mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / H100_BF16_PEAK_FLOPS
+    mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / PEAK_BF16_FLOPS
     remaining = max(0, TIME_BUDGET - total_training_time)
 
     print(f"\rstep {step:05d} ({pct_done:.1f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec:,} | mfu: {mfu:.1f}% | epoch: {epoch} | remaining: {remaining:.0f}s    ", end="", flush=True)
@@ -615,7 +652,7 @@ with autocast_ctx:
 # Final summary
 t_end = time.time()
 startup_time = t_start_training - t_start
-steady_state_mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE * (step - 10) / total_training_time / H100_BF16_PEAK_FLOPS if total_training_time > 0 else 0
+steady_state_mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE * (step - 10) / total_training_time / PEAK_BF16_FLOPS if total_training_time > 0 else 0
 peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
 
 print("---")
@@ -628,3 +665,14 @@ print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
 print(f"num_steps:        {step}")
 print(f"num_params_M:     {num_params / 1e6:.1f}")
 print(f"depth:            {DEPTH}")
+
+# Save checkpoint
+ckpt = {
+    "model": model.state_dict(),
+    "config": asdict(config),
+    "tokenizer_vocab_size": vocab_size,
+    "val_bpb": val_bpb,
+    "total_tokens": total_tokens,
+}
+torch.save(ckpt, "model.pt")
+print("model saved to model.pt")
