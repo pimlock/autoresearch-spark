@@ -1,8 +1,10 @@
-# autoresearch
+# autoresearch-spark
 
-![teaser](progress.png)
+Fork of [karpathy/autoresearch](https://github.com/karpathy/autoresearch) adapted for the [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/) (GB10 / Blackwell).
 
-*One day, frontier AI research used to be done by meat computers in between eating, sleeping, having other fun, and synchronizing once in a while using sound wave interconnect in the ritual of "group meeting". That era is long gone. Research is now entirely the domain of autonomous swarms of AI agents running across compute cluster megastructures in the skies. The agents claim that we are now in the 10,205th generation of the code base, in any case no one could tell if that's right or wrong as the "code" is now a self-modifying binary that has grown beyond human comprehension. This repo is the story of how it all began. -@karpathy, March 2026*.
+![progress](progress.png)
+
+*118 experiments ran autonomously overnight on a DGX Spark. The agent reduced val_bpb from 1.8794 (baseline) to 1.2265 -- a 34.7% improvement -- by adapting hyperparameters to the GB10's constraints. See the [spark-appendix](../../tree/spark-appendix) branch for platform details, learnings, and OpenShell sandboxing integration.*
 
 The idea: give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and (hopefully) a better model. The training code here is a simplified single-GPU implementation of [nanochat](https://github.com/karpathy/nanochat). The core idea is that you're not touching any of the Python files like you normally would as a researcher. Instead, you are programming the `program.md` Markdown files that provide context to the AI agents and set up your autonomous research org. The default `program.md` in this repo is intentionally kept as a bare bones baseline, though it's obvious how one would iterate on it over time to find the "research org code" that achieves the fastest research progress, how you'd add more agents to the mix, etc. A bit more context on this project is here in this [tweet](https://x.com/karpathy/status/2029701092347630069).
 
@@ -20,7 +22,7 @@ If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/s
 
 ## Quick start
 
-**Requirements:** A single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
+**Requirements:** A single NVIDIA GPU (tested on DGX Spark / GB10 and H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
 
 ```bash
 
@@ -64,26 +66,58 @@ pyproject.toml  — dependencies
 - **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
 - **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
 
-## Platform support
+## Changes from upstream
 
-This code currently requires that you have a single NVIDIA GPU. In principle it is quite possible to support CPU, MPS and other platforms but this would also bloat the code. I'm not 100% sure that I want to take this on personally right now. People can reference (or have their agents reference) the full/parent nanochat repository that has wider platform support and shows the various solutions (e.g. a Flash Attention 3 kernels fallback implementation, generic device support, autodetection, etc.), feel free to create forks or discussions for other platforms and I'm happy to link to them here in the README in some new notable forks section or etc.
+- **SDPA instead of Flash Attention 3.** The GB10 (sm_121a) has no prebuilt FA3 kernels. SDPA via `F.scaled_dot_product_attention` is actually ~2% faster on this GPU anyway.
+- **Triton ptxas fix.** Sets `TRITON_PTXAS_PATH` to the system CUDA 13.0 ptxas, which supports sm_121a for Triton kernel compilation.
+- **GPU auto-detection for MFU.** Replaces the hardcoded `H100_BF16_PEAK_FLOPS` with a lookup table covering H100, H200, A100, B200, GB10, and AMD MI300X/MI250X.
+- **NaN guard.** Aborts on NaN loss (the GB10's limited matmul precision occasionally produces NaNs during aggressive hyperparameter search).
+- **Checkpoint save.** Saves `model.pt` at end of training for use with `generate.py` (on the spark-appendix branch).
+- **Removed `kernels` dependency.** Not needed when using SDPA.
+- **OpenShell sandbox.** `sandbox/` contains a Dockerfile and policies for running the agent in a locked-down container (see below).
 
-Seeing as there seems to be a lot of interest in tinkering with autoresearch on much smaller compute platforms than an H100, a few extra words. If you're going to try running autoresearch on smaller computers (Macbooks etc.), I'd recommend one of the forks below. On top of this, here are some recommendations for how to tune the defaults for much smaller models for aspiring forks:
+## OpenShell sandboxing
 
-1. To get half-decent results I'd use a dataset with a lot less entropy, e.g. this [TinyStories dataset](https://huggingface.co/datasets/karpathy/tinystories-gpt4-clean). These are GPT-4 generated short stories. Because the data is a lot narrower in scope, you will see reasonable results with a lot smaller models (if you try to sample from them after training).
-2. You might experiment with decreasing `vocab_size`, e.g. from 8192 down to 4096, 2048, 1024, or even - simply byte-level tokenizer with 256 possibly bytes after utf-8 encoding.
-3. In `prepare.py`, you'll want to lower `MAX_SEQ_LEN` a lot, depending on the computer even down to 256 etc. As you lower `MAX_SEQ_LEN`, you may want to experiment with increasing `DEVICE_BATCH_SIZE` in `train.py` slightly to compensate. The number of tokens per fwd/bwd pass is the product of these two.
-4. Also in `prepare.py`, you'll want to decrease `EVAL_TOKENS` so that your validation loss is evaluated on a lot less data.
-5. In `train.py`, the primary single knob that controls model complexity is the `DEPTH` (default 8, here). A lot of variables are just functions of this, so e.g. lower it down to e.g. 4.
-6. You'll want to most likely use `WINDOW_PATTERN` of just "L", because "SSSL" uses alternating banded attention pattern that may be very inefficient for you. Try it.
-7. You'll want to lower `TOTAL_BATCH_SIZE` a lot, but keep it powers of 2, e.g. down to `2**14` (~16K) or so even, hard to tell.
+The `sandbox/` directory provides integration with [OpenShell](https://github.com/NVIDIA/OpenShell) for running the autonomous agent in a sandboxed container. This has been tested on DGX Spark but could be adapted to other platforms. Prerequisite: [OpenShell](https://github.com/NVIDIA/OpenShell) installed on your Spark.
 
-I think these would be the reasonable hyperparameters to play with. Ask your favorite coding agent for help and copy paste them this guide, as well as the full source code.
+The image is built ahead of time with all dependencies pre-installed, so at runtime the agent gets a locked-down environment:
 
-## Notable forks
+- **Filesystem:** read-only system paths, read-write only to `/sandbox` and `/tmp`
+- **Network:** only specific endpoints allowed (Anthropic API, GitHub, HuggingFace, NVIDIA inference)
+- **Process:** runs as unprivileged `sandbox` user, not root
 
-- [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (MacOS)
-- [trevin-creator/autoresearch-mlx](https://github.com/trevin-creator/autoresearch-mlx) (MacOS)
+```bash
+# Launch with OpenShell (simple — drops straight into claude)
+openshell sandbox create \
+  --remote my-spark --gpu \
+  --provider claude --provider github \
+  --from ghcr.io/pimlock/autoresearch-spark -- start
+
+# Launch with zellij (recommended for long runs)
+openshell sandbox create \
+  --remote my-spark --gpu \
+  --provider claude --provider github \
+  --from ghcr.io/pimlock/autoresearch-spark -- start-with-zellij
+```
+
+`start-with-zellij` opens claude and a `run.log` preview pane inside [zellij](https://zellij.dev/), a terminal multiplexer (runs in locked mode, ctrl+g to unlock).
+
+See `sandbox/policy.yaml` (locked-down runtime) and `sandbox/policy-dev.yaml` (adds PyPI access for development).
+
+## spark-appendix branch
+
+The [spark-appendix](../../tree/spark-appendix) branch extends this with:
+
+- `generate.py` -- interactive inference from a trained checkpoint
+- `benchmark_flops.py` -- empirical BF16 TFLOPS measurement for your GPU
+- `LEARNINGS.md` -- detailed GB10 platform findings from ~135 experiments
+- `docs/spark-gb10.md` -- compatibility fix documentation
+
+## Notable forks (of upstream)
+
+- [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (macOS)
+- [andyluo7/autoresearch](https://github.com/andyluo7/autoresearch) (AMD ROCm / MI300X)
+- [trevin-creator/autoresearch-mlx](https://github.com/trevin-creator/autoresearch-mlx) (macOS / MLX)
 - [jsegov/autoresearch-win-rtx](https://github.com/jsegov/autoresearch-win-rtx) (Windows)
 - [andyluo7/autoresearch](https://github.com/andyluo7/autoresearch) (AMD)
 
