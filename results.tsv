@@ -1,0 +1,135 @@
+commit	val_bpb	memory_gb	status	description
+69401db	1.879448	44.0	keep	baseline
+c816843	1.671549	11.4	keep	reduce TOTAL_BATCH_SIZE 2^19->2^17 DEVICE_BATCH_SIZE 128->32 for 4x more steps (89 vs 31)
+6d09586	1.400966	11.3	keep	reduce TOTAL_BATCH_SIZE to 2^16 for 8x more steps (164 vs 31)
+cdcad4a	1.310733	5.9	keep	reduce TOTAL_BATCH_SIZE to 2^15 DEVICE_BATCH_SIZE=16 for 360 steps
+2053c30	1.307261	3.2	keep	reduce TOTAL_BATCH_SIZE to 2^14 DEVICE_BATCH_SIZE=8 for 689 steps
+dc7dcbb	1.330127	1.8	discard	TOTAL_BATCH_SIZE=2^13 DEVICE_BATCH_SIZE=4 too small batch (1242 steps but worse)
+c32441d	1.309080	3.2	discard	increased LRs for smaller batch (MATRIX_LR 0.04->0.05 etc) - no improvement
+cbc39c6	1.476570	7.0	discard	DEPTH=12 with 2^14 batch - fewer steps (254 vs 689) worse result
+f0d16f0	1.260133	1.9	keep	DEPTH=6 with 2^14 batch - 1289 steps (more steps wins)
+fe8184e	1.259721	1.0	keep	DEPTH=4 with 2^14 batch - 2593 steps (marginally better)
+8be05f5	1.271208	0.8	discard	DEPTH=3 too small - fewer capacity hurts (3263 steps but worse)
+1a501f2	1.264199	1.8	discard	ASPECT_RATIO=128 wider model DEPTH=4 - fewer steps (1259 vs 2593) worse result
+157f741	1.256980	1.0	keep	HEAD_DIM=64 (4 attention heads vs 2) - 2713 steps improved
+9b7e533	1.256055	1.4	keep	ASPECT_RATIO=96 HEAD_DIM=64 model_dim=384 6 heads DEPTH=4 - 1861 steps
+b89ae47	1.265556	1.4	discard	DEPTH=5 ASPECT_RATIO=64 HEAD_DIM=64 model_dim=320 - worse than D4
+fe54f79	1.265395	1.4	discard	WARMDOWN_RATIO=0.3 longer plateau - worse than 0.5
+1c5a115	1.260848	1.6	discard	ASPECT_RATIO=112 model_dim=448 7-heads DEPTH=4 - worse than AR=96
+edde5b9	1.251673	1.4	keep	WINDOW_PATTERN=L all full-context attention - improved over SSSL
+69cdeb0	1.259864	1.8	discard	ASPECT_RATIO=128 model_dim=512 with WINDOW=L - fewer steps worse
+755ce7f	1.249108	1.4	keep	ADAM_BETAS (0.8,0.95)->(0.9,0.99) - improved
+6ae52eb	1.256599	1.4	discard	ADAM_BETAS (0.95,0.999) - worse
+ef6b454	1.242652	1.4	keep	WEIGHT_DECAY 0.2->0.0 no weight decay - improved
+3044f63	1.242180	1.4	keep	EMBEDDING_LR 0.6->0.3 marginal improvement
+258280c	1.242101	1.4	keep	MATRIX_LR 0.04->0.06 marginal improvement
+48a62d4	1.252495	1.4	discard	MATRIX_LR=0.08 too high - worse
+6ccf44c	1.249033	1.3	discard	GQA KV_GROUPS=2 (3 kv heads) - slight speed gain but worse quality
+02e4d1a	1.249337	1.4	discard	UNEMBEDDING_LR 0.004->0.008 - worse
+bf819c0	1.240169	1.4	keep	FINAL_LR_FRAC 0.0->0.1 don't decay LR to 0 - improved
+0196f7b	1.242974	1.4	discard	FINAL_LR_FRAC=0.2 - worse than 0.1
+7334b64	1.244418	1.4	discard	WARMUP_RATIO=0.02 small warmup - worse
+d8034d6	1.262974	1.8	discard	MLP_EXPANSION 4->8 wider MLP - fewer steps worse
+a4a9989	1.270437	1.3	discard	disable value embeddings - faster but significantly worse quality
+e905b83	1.241671	1.4	discard	WARMDOWN_RATIO=0.7 longer cooldown - marginally worse than 0.5
+5629871	1.245790	1.4	discard	all-layers value embeddings - more params fewer steps worse
+c6cc227	1.244532	1.4	discard	MATRIX_LR=0.07 slightly worse than 0.06
+348e5f6	1.245595	1.4	discard	SCALAR_LR=1.0 doubled scalar LR - worse
+3e4ba6d	1.246615	1.4	discard	softcap 15->30 - worse
+fe49639	1.253700	1.4	discard	Muon ns_steps 5->3 - faster but worse quality
+78d50e7	1.255654	1.4	discard	SwiGLU activation replaces ReLU^2 - worse quality fewer steps
+28bdb6c	1.252112	1.4	discard	EMBEDDING_LR=0.1 too low - worse than 0.3
+f344015	1.245507	1.4	discard	WINDOW_PATTERN=SL alternating - worse than all-L
+4c13bf4	1.241996	2.5	discard	TOTAL_BATCH_SIZE=2^15 DEVICE_BATCH_SIZE=16 larger batch - fewer steps slightly worse
+eb3cc99	1.245809	1.4	discard	constant Muon momentum 0.95 - worse than warmup 0.85->0.95
+b3c4a48	1.300941	2.8	discard	DEPTH=6 AR=96 HD=64 model_dim=576 - fewer steps much worse
+8f3724d	1.242412	1.4	discard	ADAM_BETAS (0.9,0.95) slightly worse than (0.9,0.99)
+210fa3e	1.239884	1.4	keep	FINAL_LR_FRAC 0.1->0.05 marginal improvement
+a3a2e3c	1.241718	1.4	discard	FINAL_LR_FRAC=0.03 worse than 0.05
+c42e5bf	1.247726	1.4	discard	EMBEDDING_LR=0.2 worse than 0.3
+8daab23	1.238554	1.4	keep	slower Muon momentum warmup over 500 steps - improved
+e67ae2d	1.237273	1.4	keep	Muon momentum warmup over 1000 steps - further improved
+1970af3	1.235843	1.4	keep	Muon momentum warmup over 2000 steps - still improving
+fc58217	1.235494	1.4	keep	Muon momentum warmup over 5000 steps (never fully reaches 0.95)
+e4f88f1	1.235664	1.4	discard	constant Muon momentum 0.85 - essentially same as 5000-step warmup but barely worse
+5c83d35	1.233972	1.4	keep	MATRIX_LR 0.06->0.05 with slow Muon warmup - improved
+7db8ff7	1.236986	1.4	discard	MATRIX_LR=0.04 worse than 0.05
+4c006e4	1.238753	1.4	discard	EMBEDDING_LR=0.4 UNEMBEDDING_LR=0.006 - worse
+fc2ef0f	1.234761	1.4	discard	Muon beta2=0.99 slightly worse than 0.95
+a2930b3	1.233492	1.4	keep	WARMDOWN_RATIO=0.6 slightly improved
+406fbea	1.233959	1.4	discard	WARMDOWN_RATIO=0.65 slightly worse
+221cddb	1.234445	1.4	discard	FINAL_LR_FRAC=0.04 slightly worse than 0.05
+583bf45	1.312342	0.8	discard	DEVICE_BATCH_SIZE=4 grad_accum=2 - much worse than no accumulation
+bee3a68	1.236665	1.4	discard	Muon ns_steps=4 slightly worse than 5
+44365a9	1.288828	1.4	discard	HEAD_DIM=32 (12 heads) same model size but much worse
+026a10e	1.233513	1.4	discard	x0_lambdas init 0.1->0.0 essentially same result (within noise)
+aa2f0f2	1.239096	1.4	discard	gradient clipping max_norm=1.0 - worse (overhead reduces steps)
+ec064e5	1.244228	1.4	discard	GELU activation - worse than ReLU^2
+222c060	1.236249	1.4	discard	cosine LR decay - worse than linear
+1a356c7	1.237428	1.4	discard	SCALAR_LR=0.2 - worse than 0.5
+d19818d	1.233602	1.4	discard	RoPE base 10000->500000 - essentially no change (within noise)
+8f83f5b	1.233856	1.4	discard	ve_gate_channels 32->64 - essentially no change
+8b40814	1.235693	1.4	discard	Adam eps 1e-10->1e-8 - slightly worse
+47e0c2a	1.245663	1.3	discard	VE only in last layer - fewer params but worse quality
+b0892aa	1.240014	1.4	discard	wte init std 1.0->0.02 - worse quality
+8ca0823	1.240093	1.4	discard	bypass dmodel_lr_scale=1.0 - worse (scaling helps)
+43e7720	1.246679	1.1	discard	alternate attn-only and attn+MLP layers - worse even with more steps
+b3a4f4b	1.235903	1.4	discard	combined LR tuning EMBEDDING=0.35 UNEMBEDDING=0.003 MATRIX=0.055 - worse
+d09b098	1.234156	1.3	discard	MLP expansion 4->3 fewer params more steps - slightly worse
+f8d002f	1.242396	1.4	discard	remove logit softcap - worse (softcap helps)
+7765167	1.239359	1.4	discard	WARMUP_RATIO=0.01 small warmup - worse than no warmup
+71caf71	1.260795	1.3	discard	parallel attention+MLP (GPT-J style) shared norm - much worse
+2879a9b	1.233574	1.4	discard	softcap 15->10 essentially no change (within noise)
+e64b62d	1.235908	1.4	discard	EMBEDDING_LR 0.3->0.25 - worse
+f80ea9b	1.233016	1.4	keep	Muon beta2 0.95->0.90 - improved
+b0b8561	1.233123	1.4	discard	Muon beta2 0.90->0.85 - essentially same (within noise)
+324387e	1.234530	1.4	discard	MATRIX_LR 0.05->0.055 with beta2=0.90 - worse
+b062b40	1.233214	1.4	discard	WARMDOWN_RATIO=0.65 with beta2=0.90 - slightly worse
+5422a9c	1.234299	1.4	discard	FINAL_LR_FRAC 0.05->0.07 with beta2=0.90 - worse
+0b9e820	1.235157	1.4	discard	ADAM_BETAS beta1 0.9->0.95 - worse
+6d35107	1.244430	1.4	discard	remove resid_lambdas+x0_lambdas highway - worse (highway helps)
+dcf262b	1.237570	1.4	discard	x0_lambdas init 0.1->0.2 stronger highway - worse
+1df625d	1.238273	1.4	discard	SCALAR_LR 0.5->0.3 lower highway scalar LR - worse
+bbbd42a	1.234442	1.4	discard	Muon beta2=None (pure Muon no variance reduction) - slightly worse than 0.90
+5b0997b	1.235296	1.4	discard	ADAM_BETAS beta2 0.99->0.95 - worse
+e2e21eb	1.233557	1.4	discard	Muon momentum warmup 5000->10000 steps - slightly worse
+a8dfcf6	1.244671	1.2	discard	ASPECT_RATIO 96->80 model_dim=320 more steps but worse capacity
+ae3f297	1.260791	1.3	discard	remove QK normalization - much worse (QK norm important)
+4ea6fa7	1.252059	1.4	discard	add value normalization norm(v) - much worse
+480375e	1.234871	1.4	discard	small non-zero c_proj init (0.1x scale) - slightly worse than zeros
+9482add	1.237401	1.4	discard	UNEMBEDDING_LR 0.004->0.003 - worse
+7461ef2	1.237103	1.4	discard	lm_head init std 0.001->0.01 - worse
+11cb2ee	1.233357	1.4	discard	Muon beta2 0.92 - slightly worse than 0.90
+5bc12e0	1.241434	1.6	discard	DEPTH=5 AR=72 model_dim=384 - more params fewer steps worse
+ac62f99	1.234019	1.4	discard	ve_gate_channels 32->16 - slightly worse
+726e140	1.238899	1.4	discard	MATRIX_LR 0.05->0.045 - worse
+b036f33	1.234663	1.4	discard	Muon momentum start 0.85->0.80 - slightly worse
+d9a6096	1.235314	1.4	discard	cosine warmdown instead of linear - slightly worse
+a0bc599	1.238733	1.5	discard	dropout p=0.05 in MLP - worse and more VRAM
+fc57082	1.239170	1.4	discard	Muon ns_steps 5->4 with beta2=0.90 - worse quality despite more steps
+101b9c2	1.236625	1.1	discard	TOTAL_BATCH_SIZE=12288 DBS=6 more steps but worse quality
+55e7be3	1.234381	1.1	discard	DEPTH=3 AR=128 model_dim=384 2518 steps - marginally worse than DEPTH=4
+b4b3020	1.234679	1.1	discard	DEPTH=3 AR=128 MATRIX_LR=0.06 - slightly worse
+a2cd6ff	1.236278	1.4	discard	value_embeds LR = 0.5x embedding_LR - worse (same LR better)
+340d7c9	1.243028	1.4	discard	local highway (x_prev per layer) vs global x0 - worse
+1acaf92	1.545068	1.9	discard	label_smoothing=0.1 - very bad (training/val metric mismatch)
+6c8afc0	1.234922	1.4	discard	x0_lambdas betas (0.96,0.95)->(0.9,0.99) - slightly worse
+54a45fe	1.238033	1.7	discard	TOTAL_BATCH_SIZE=20480 DBS=10 - fewer steps worse
+ae4ae3f	1.241823	1.4	discard	remove initial embedding norm - worse
+3ff8524	1.241440	1.3	discard	GQA n_kv_head=n_head//2=3 less params more steps but worse
+0b81581	1.321310	1.4	discard	post-norm instead of pre-norm - much worse
+62610f9	1.236099	1.4	discard	ve_gate full n_embd channels instead of 32 - slightly worse
+29f7cd5	1.239563	1.4	discard	scale output projection init by 1/sqrt(2*n_layer) - worse than zeros
+ebed470	1.233346	1.4	discard	torch.compile mode=reduce-overhead slightly more steps but within noise
+32a01d5	1.233039	1.4	discard	Adam eps 1e-10->1e-12 - essentially same (within noise)
+ce24b1e	1.235125	1.4	discard	ve_gate tanh instead of sigmoid - slightly worse
+e6748d4	1.227844	1.4	keep	HEAD_DIM 64->128 3 heads instead of 6 - significant improvement!
+c6198ef	1.226532	1.4	keep	HEAD_DIM=96 4 heads model_dim=384 - further improved!
+d3e5db2	1.233170	1.4	discard	HEAD_DIM=192 2 heads - too few heads worse
+6508f4f	1.228201	1.4	discard	MATRIX_LR 0.05->0.06 with HEAD_DIM=96 - worse
+d9eb69e	1.238591	1.6	discard	HEAD_DIM=112 model_dim=448 4 heads - more params fewer steps worse
+a7debc8	1.233621	1.1	discard	AR=72 model_dim=288 HD=96 3 heads - smaller model worse capacity
+52f622d	1.227055	1.4	discard	Muon beta2 0.90->0.95 with HD=96 - slightly worse (0.90 still better)
+8300741	1.227561	1.4	discard	WARMDOWN_RATIO 0.6->0.55 with HD=96 - worse
+0cd3f8c	1.227659	1.4	discard	Muon momentum warmup 5000->3000 with HD=96 - slightly worse
+1bdd899	1.228843	1.4	discard	EMBEDDING_LR 0.3->0.35 with HD=96 - worse
