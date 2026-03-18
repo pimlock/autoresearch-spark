@@ -1,31 +1,36 @@
 # autoresearch-spark
 
-Fork of [karpathy/autoresearch](https://github.com/karpathy/autoresearch) adapted for the [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/) (GB10 / Blackwell).
+Autonomous LLM pretraining research on the [NVIDIA DGX Spark](https://www.nvidia.com/en-us/products/workstations/dgx-spark/) (GB10 / Blackwell).
+
+Fork of [karpathy/autoresearch](https://github.com/karpathy/autoresearch) adapted for the GB10 single-GPU platform, with [OpenShell](https://github.com/NVIDIA/OpenShell) integration for sandboxed agent execution.
 
 ![progress](progress.png)
 
-*118 experiments ran autonomously overnight on a DGX Spark. The agent reduced val_bpb from 1.8794 (baseline) to 1.2265 -- a 34.7% improvement -- by adapting hyperparameters to the GB10's constraints. See the [spark-appendix](../../tree/spark-appendix) branch for platform details, learnings, and OpenShell sandboxing integration.*
+*118 experiments ran autonomously overnight on a DGX Spark. The agent reduced val_bpb from 1.8794 (baseline) to 1.2265 -- a 34.7% improvement -- by adapting hyperparameters to the platform's constraints. See [LEARNINGS.md](LEARNINGS.md) for details.*
 
-The idea: give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and (hopefully) a better model. The training code here is a simplified single-GPU implementation of [nanochat](https://github.com/karpathy/nanochat). The core idea is that you're not touching any of the Python files like you normally would as a researcher. Instead, you are programming the `program.md` Markdown files that provide context to the AI agents and set up your autonomous research org. The default `program.md` in this repo is intentionally kept as a bare bones baseline, though it's obvious how one would iterate on it over time to find the "research org code" that achieves the fastest research progress, how you'd add more agents to the mix, etc. A bit more context on this project is here in this [tweet](https://x.com/karpathy/status/2029701092347630069).
+## What is this?
+
+Give an AI agent a small but real LLM training setup and let it experiment autonomously overnight. It modifies the code, trains for 5 minutes, checks if the result improved, keeps or discards, and repeats. You wake up in the morning to a log of experiments and a better model.
+
+The training code is a simplified single-GPU implementation of [nanochat](https://github.com/karpathy/nanochat). The core idea: you don't touch the Python files like a normal researcher. Instead, you program the `program.md` Markdown file that provides context to the AI agent and sets up your autonomous research org. The agent edits `train.py`, runs experiments, and iterates.
+
+This fork targets the DGX Spark specifically. The GB10 GPU (Blackwell, compute capability 12.1 / sm_121a) has unique toolchain requirements and much lower throughput than an H100, so the hyperparameter sweet spots are different. The agent discovers these differences automatically.
 
 ## How it works
 
-The repo is deliberately kept small and only really has three files that matter:
+The repo has three files that matter:
 
-- **`prepare.py`** — fixed constants, one-time data prep (downloads training data, trains a BPE tokenizer), and runtime utilities (dataloader, evaluation). Not modified.
-- **`train.py`** — the single file the agent edits. Contains the full GPT model, optimizer (Muon + AdamW), and training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
-- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
+- **`prepare.py`** -- fixed constants, one-time data prep (downloads training data, trains a BPE tokenizer), and runtime utilities (dataloader, evaluation). Not modified.
+- **`train.py`** -- the single file the agent edits. Contains the full GPT model, optimizer (Muon + AdamW), and training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, model size, etc.
+- **`program.md`** -- baseline instructions for the agent. Point your agent here and let it go.
 
-By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
+Training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation). The metric is **val_bpb** (validation bits per byte) -- lower is better, and vocab-size-independent so architectural changes are fairly compared.
 
-If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/status/2030720614752039185) looks pretty good for a lot more context.
+## Quick start (bare metal)
 
-## Quick start
-
-**Requirements:** A single NVIDIA GPU (tested on DGX Spark / GB10 and H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
+**Requirements:** DGX Spark (or any single NVIDIA GPU), Python 3.10+, [uv](https://docs.astral.sh/uv/).
 
 ```bash
-
 # 1. Install uv project manager (if you don't already have it)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
@@ -35,54 +40,29 @@ uv sync
 # 3. Download data and train tokenizer (one-time, ~2 min)
 uv run prepare.py
 
-# 4. Manually run a single training experiment (~5 min)
+# 4. Run a single training experiment (~5 min)
 uv run train.py
 ```
 
-If the above commands all work ok, your setup is working and you can go into autonomous research mode.
+Then point your AI agent at `program.md` and let it run.
 
-## Running the agent
+## Running with OpenShell (sandboxed)
 
-Simply spin up your Claude/Codex or whatever you want in this repo (and disable all permissions), then you can prompt something like:
+[OpenShell](https://github.com/NVIDIA/OpenShell) provides a sandboxed container environment for autonomous agents. The agent runs with minimal permissions -- it can't install arbitrary packages, can't access the network beyond what's explicitly allowed, and can't modify anything outside its sandbox. This is important when you're letting an AI run unsupervised for hours.
 
-```
-Hi have a look at program.md and let's kick off a new experiment! let's do the setup first.
-```
+### How the sandboxing works
 
-The `program.md` file is essentially a super lightweight "skill".
+1. **The container image is built ahead of time** with all dependencies pre-installed (`sandbox/Dockerfile`). PyTorch, the tokenizer libraries, and agent tools (Claude, OpenCode, Codex) are all baked into the image.
 
-## Project structure
+2. **At runtime, the agent gets a locked-down environment.** The OpenShell policy files (`sandbox/policy.yaml`, `sandbox/policy-dev.yaml`) define exactly what the agent can access:
+   - **Filesystem:** read-only access to system paths, read-write only to `/sandbox` and `/tmp`
+   - **Network:** only the specific endpoints needed (Anthropic API, GitHub for git, HuggingFace for data download, NVIDIA inference API)
+   - **Process:** runs as an unprivileged `sandbox` user, not root
+   - **Landlock:** Linux security module further restricts filesystem access
 
-```
-prepare.py      — constants, data prep + runtime utilities (do not modify)
-train.py        — model, optimizer, training loop (agent modifies this)
-program.md      — agent instructions
-pyproject.toml  — dependencies
-```
+3. **The agent can modify code and run experiments** but can't escape the sandbox, install backdoors, exfiltrate data, or do anything unexpected. If the agent tries something malicious or buggy, the damage is contained.
 
-## Design choices
-
-- **Single file to modify.** The agent only touches `train.py`. This keeps the scope manageable and diffs reviewable.
-- **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
-- **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
-
-## Changes from upstream
-
-- **SDPA instead of Flash Attention 3.** The GB10 (sm_121a) has no prebuilt FA3 kernels. SDPA via `F.scaled_dot_product_attention` is actually ~2% faster on this GPU anyway.
-- **Triton ptxas fix.** Sets `TRITON_PTXAS_PATH` to the system CUDA 13.0 ptxas, which supports sm_121a for Triton kernel compilation.
-- **GPU auto-detection for MFU.** Replaces the hardcoded `H100_BF16_PEAK_FLOPS` with a lookup table covering H100, H200, A100, B200, GB10, and AMD MI300X/MI250X.
-- **NaN guard.** Aborts on NaN loss (the GB10's limited matmul precision occasionally produces NaNs during aggressive hyperparameter search).
-- **Checkpoint save.** Saves `model.pt` at end of training for use with `generate.py` (on the spark-appendix branch).
-- **Removed `kernels` dependency.** Not needed when using SDPA.
-- **OpenShell sandbox.** `sandbox/` contains a Dockerfile and policies for running the agent in a locked-down container (see below).
-
-## OpenShell sandboxing
-
-The `sandbox/` directory provides integration with [OpenShell](https://github.com/NVIDIA/OpenShell) for running the autonomous agent in a sandboxed container. The image is built ahead of time with all dependencies pre-installed, so at runtime the agent gets a locked-down environment:
-
-- **Filesystem:** read-only system paths, read-write only to `/sandbox` and `/tmp`
-- **Network:** only specific endpoints allowed (Anthropic API, GitHub, HuggingFace, NVIDIA inference)
-- **Process:** runs as unprivileged `sandbox` user, not root
+### Quick start with OpenShell
 
 ```bash
 # Build the sandbox image
@@ -90,29 +70,88 @@ docker build -f sandbox/Dockerfile -t autoresearch-spark .
 
 # Launch with OpenShell
 openshell sandbox create \
-  --remote my-spark --gpu \
-  --provider claude --provider github \
-  --from autoresearch-spark -- claude
+  --remote my-spark \
+  --gpu \
+  --provider claude \
+  --provider github \
+  --from autoresearch-spark \
+  -- claude
 ```
 
-See `sandbox/policy.yaml` (locked-down runtime) and `sandbox/policy-dev.yaml` (adds PyPI access for development).
+This launches an autoresearch sandbox on your DGX Spark with Claude as the autonomous researcher.
+
+### Why CUDA 13.0 + cu128?
+
+The GB10 GPU is compute capability 12.1 (sm_121a), which creates a unique toolchain situation:
+
+- **CUDA 13.0 devel base image:** provides `ptxas` with sm_121a support, which Triton needs to compile optimized GPU kernels.
+- **PyTorch cu128 wheels:** the cu130 wheels are not yet functional on this platform, but cu128 works correctly on the CUDA 13.0 runtime (backward compatible).
+- **`TRITON_PTXAS_PATH`** is set globally so Triton finds the CUDA 13.0 ptxas automatically.
+
+## GB10 platform notes
+
+The GB10 is significantly slower than an H100 for this workload (MFU ~0.86% vs ~40%). The agent compensates by discovering that smaller batch sizes are critical -- the default `TOTAL_BATCH_SIZE=2^19` only yields ~31 training steps in 5 minutes on GB10, vs ~950 on H100. Reducing to `2^14` gives ~689 steps and dramatically better results.
+
+Key adaptations the agent discovered (from ~135 experiments):
+
+| Change | Impact |
+|--------|--------|
+| `TOTAL_BATCH_SIZE` 2^19 -> 2^14 | val_bpb 1.88 -> 1.31 |
+| `DEPTH` 8 -> 4 | More steps per time budget |
+| `WINDOW_PATTERN` "SSSL" -> "L" | Full-context beats sliding window |
+| `WEIGHT_DECAY` 0.2 -> 0.0 | No weight decay helps at small batch |
+| `ADAM_BETAS` (0.8, 0.95) -> (0.9, 0.99) | Higher beta2 for small batches |
+| `HEAD_DIM` 128 -> 96 | 4 heads at model_dim=384 |
+| Slow Muon momentum warmup (5000 steps) | Gradual warmup improves stability |
+
+See [LEARNINGS.md](LEARNINGS.md) for the full details and [docs/spark-gb10.md](docs/spark-gb10.md) for the GB10-specific compatibility fixes.
+
+## GPU auto-detection
+
+MFU (model FLOPS utilization) is reported relative to the detected GPU's peak BF16 FLOPS. The lookup table in `train.py` includes:
+
+| GPU | Peak BF16 TFLOPS |
+|-----|------------------|
+| H100/H200 | 989.5 |
+| A100 | 312.0 |
+| B200 | 2250.0 |
+| GB10 (DGX Spark) | 125.0 |
+| MI300X/MI308X/MI325X | 1307.4 |
+| MI250X | 383.0 |
+
+Unknown GPUs fall back to H100 with a warning.
+
+## Project structure
+
+```
+prepare.py           -- constants, data prep + runtime utilities (do not modify)
+train.py             -- model, optimizer, training loop (agent modifies this)
+generate.py          -- interactive inference from a trained checkpoint
+program.md           -- agent instructions
+LEARNINGS.md         -- platform-specific findings from experiments
+pyproject.toml       -- dependencies
+analysis.ipynb       -- notebook for analyzing results.tsv
+docs/spark-gb10.md   -- GB10 compatibility details (SDPA, Triton ptxas)
+sandbox/
+  Dockerfile         -- OpenShell sandbox image (CUDA 13.0, PyTorch cu128)
+  policy.yaml        -- runtime network/filesystem policy (locked down)
+  policy-dev.yaml    -- development policy (adds PyPI access)
+```
 
 ## spark-appendix branch
 
-The [spark-appendix](../../tree/spark-appendix) branch extends this with:
+The [spark-appendix](../../tree/spark-appendix) branch adds extra tooling:
 
-- `generate.py` -- interactive inference from a trained checkpoint
 - `benchmark_flops.py` -- empirical BF16 TFLOPS measurement for your GPU
-- `LEARNINGS.md` -- detailed GB10 platform findings from ~135 experiments
-- `docs/spark-gb10.md` -- compatibility fix documentation
 
-## Notable forks (of upstream)
+## Upstream
 
-- [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (macOS)
+Based on [karpathy/autoresearch](https://github.com/karpathy/autoresearch). Notable forks of the upstream:
+
+- [miolini/autoresearch-macos](https://github.com/miolini/autoresearch-macos) (macOS / MPS)
 - [andyluo7/autoresearch](https://github.com/andyluo7/autoresearch) (AMD ROCm / MI300X)
 - [trevin-creator/autoresearch-mlx](https://github.com/trevin-creator/autoresearch-mlx) (macOS / MLX)
 - [jsegov/autoresearch-win-rtx](https://github.com/jsegov/autoresearch-win-rtx) (Windows)
-- [andyluo7/autoresearch](https://github.com/andyluo7/autoresearch) (AMD)
 
 ## License
 
