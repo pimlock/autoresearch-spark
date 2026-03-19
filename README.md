@@ -87,17 +87,17 @@ The image is built ahead of time with all dependencies pre-installed, so at runt
 - **Process:** runs as unprivileged `sandbox` user, not root
 
 ```bash
-# Launch with OpenShell (simple — drops straight into claude)
-openshell sandbox create \
-  --remote my-spark --gpu \
-  --provider claude --provider github \
-  --from ghcr.io/pimlock/autoresearch-spark -- start
-
 # Launch with zellij (recommended for long runs)
 openshell sandbox create \
-  --remote my-spark --gpu \
+  --gpu \
   --provider claude --provider github \
   --from ghcr.io/pimlock/autoresearch-spark -- start-with-zellij
+  
+# Launch with OpenShell (simple — drops straight into claude)
+openshell sandbox create \
+  --gpu \
+  --provider claude --provider github \
+  --from ghcr.io/pimlock/autoresearch-spark -- start
 ```
 
 `start-with-zellij` opens claude and a `run.log` preview pane inside [zellij](https://zellij.dev/), a terminal multiplexer (runs in locked mode, ctrl+g to unlock).
